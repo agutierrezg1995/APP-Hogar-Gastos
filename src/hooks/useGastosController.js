@@ -5,6 +5,7 @@ import { CATEGORIAS } from "../models/categoriaModel";
 const CLAVE_GASTOS = "hogar_gastos";
 const CLAVE_INGRESOS = "hogar_ingresos";
 const CLAVE_DEUDAS = "hogar_deudas";
+const CLAVE_PAYLOAD_BD = "hogar_payload_supabase";
 export const PERSONAS_TABLERO = Object.freeze(["anguspunkx", "lizafernanda"]);
 
 /** Lee un arreglo persistido y retorna fallback si hay datos corruptos. */
@@ -106,6 +107,23 @@ export function useGastosController() {
   const persistirDeudas = (lista) => {
     setDeudas(lista);
     localStorage.setItem(CLAVE_DEUDAS, JSON.stringify(lista));
+  };
+  /** Refresca el almacenamiento local con el estado actual en memoria. */
+  const refrescarStorageLocal = () => {
+    localStorage.setItem(CLAVE_GASTOS, JSON.stringify(gastos));
+    localStorage.setItem(CLAVE_INGRESOS, JSON.stringify(ingresos));
+    localStorage.setItem(CLAVE_DEUDAS, JSON.stringify(deudas));
+  };
+  /** Guarda un payload listo para base de datos y sincroniza storage local. */
+  const guardarParaBaseDatos = (registros) => {
+    const paquete = {
+      generadoEn: new Date().toISOString(),
+      total: registros.length,
+      registros,
+    };
+    localStorage.setItem(CLAVE_PAYLOAD_BD, JSON.stringify(paquete));
+    refrescarStorageLocal();
+    return paquete;
   };
   /** Agrega un gasto validado y devuelve resultado para feedback inmediato. */
   const agregar = (entrada) => {
@@ -213,6 +231,8 @@ export function useGastosController() {
     agregar,
     agregarIngreso,
     agregarDeuda,
+    guardarParaBaseDatos,
+    refrescarStorageLocal,
     eliminar,
     eliminarDeuda,
     totalMes,

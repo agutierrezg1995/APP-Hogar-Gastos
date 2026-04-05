@@ -16,7 +16,8 @@ const CREDENCIALES_HASH = Object.freeze({
   "lizangus@gmail.com": "62dd8ae7cc8690c0e43be9e4f64b3582a7a518c70c2c61e31d194631a74e2b2d",
   "anguspunkx@gmail.com": "11bcdeefe5b2586fba7d02b8c067a00d1c48653830314ede44cbb07fcc082812",
 });
-const CLASE_CARD = "rounded-xl bg-white shadow-sm ring-1 ring-slate-200 transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-300";
+const CLASE_CARD = "rounded-2xl bg-white/95 shadow-sm ring-1 ring-slate-200 backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:ring-indigo-300";
+const CLASE_BOTON_PRIMARIO = "rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 px-3 py-2 font-medium text-white transition hover:brightness-110";
 
 /** Calcula hash SHA-256 para comparar claves sin texto plano en memoria persistida. */
 const hashSeguro = async (texto) => {
@@ -34,6 +35,7 @@ export default function App() {
     agregar,
     agregarIngreso,
     agregarDeuda,
+    guardarParaBaseDatos,
     eliminar,
     eliminarDeuda,
     totalMes,
@@ -58,7 +60,6 @@ export default function App() {
   });
   const [login, setLogin] = useState({ usuario: "", clave: "" });
   const [errorLogin, setErrorLogin] = useState("");
-  const [filtroMovimientos, setFiltroMovimientos] = useState("todos");
   const [filtroPersona, setFiltroPersona] = useState("todos");
   const [filtroFechaInicio, setFiltroFechaInicio] = useState(inicioMes);
   const [filtroFechaFin, setFiltroFechaFin] = useState(hoy);
@@ -68,7 +69,6 @@ export default function App() {
     resumenGeneral: true,
     deudas: true,
     grafica: true,
-    movimientos: true,
     tablaFinal: true,
   });
   const [formulario, setFormulario] = useState({ persona: "", descripcion: "", monto: "", medioPago: "", categoria: "", fecha: hoy });
@@ -81,9 +81,11 @@ export default function App() {
 
   /** Aplica estilo de color por persona para lectura rapida del dashboard. */
   const clasePersona = (persona, activo) => {
-    if (persona === "anguspunkx") return activo ? "bg-sky-600 text-white" : "bg-sky-50 text-sky-700";
-    return activo ? "bg-rose-600 text-white" : "bg-rose-50 text-rose-700";
+    if (persona === "anguspunkx") return activo ? "bg-cyan-600 text-white" : "bg-cyan-50 text-cyan-700";
+    return activo ? "bg-pink-600 text-white" : "bg-pink-50 text-pink-700";
   };
+  /** Devuelve clase visual del encabezado plegable según su estado. */
+  const clasePestana = (abierta) => (abierta ? "bg-indigo-50 text-indigo-800" : "bg-white text-slate-800");
   /** Valida si una fecha cae dentro del rango elegido en la cabecera. */
   const estaEnRango = (fecha) => (!filtroFechaInicio || fecha >= filtroFechaInicio) && (!filtroFechaFin || fecha <= filtroFechaFin);
 
@@ -137,9 +139,11 @@ export default function App() {
   const onCambiarDeuda = (campo, valor) => setFormularioDeuda((prev) => ({ ...prev, [campo]: valor }));
   /** Guarda un gasto y refresca feedback visual. */
   const onEnviarGasto = () => {
-    const r = agregar(formulario);
+    const personaFinal = formulario.persona || (filtroPersona !== "todos" ? filtroPersona : "");
+    const r = agregar({ ...formulario, persona: personaFinal });
     setErrores(r.errores || {});
     if (r.ok) {
+      setErrores({});
       setFormulario({ persona: "", descripcion: "", monto: "", medioPago: "", categoria: "", fecha: hoy });
       setMensaje("Gasto guardado correctamente.");
       return;
@@ -182,11 +186,7 @@ export default function App() {
     () => (filtroPersona === "todos" ? gastosPorFecha : gastosPorFecha.filter((g) => (g.persona || "") === filtroPersona)),
     [gastosPorFecha, filtroPersona],
   );
-  const gastosFiltrados = useMemo(() => {
-    if (filtroMovimientos === "altos") return gastosBase.filter((g) => g.monto >= 200000);
-    if (filtroMovimientos === "hoy") return gastosBase.filter((g) => g.fecha === hoy);
-    return gastosBase;
-  }, [gastosBase, filtroMovimientos, hoy]);
+  const gastosFiltrados = gastosBase;
   const totalIngresosVista = useMemo(() => ingresosFiltrados.reduce((acc, i) => acc + i.monto, 0), [ingresosFiltrados]);
   const totalGastosVista = useMemo(() => gastosFiltrados.reduce((acc, g) => acc + g.monto, 0), [gastosFiltrados]);
   const balanceVista = totalIngresosVista - totalGastosVista;
@@ -215,40 +215,40 @@ export default function App() {
   );
   const personaMasIngresa = useMemo(() => [...comparativoVista].sort((a, b) => b.ingresos - a.ingresos)[0]?.persona || "-", [comparativoVista]);
   const personaMasGasta = useMemo(() => [...comparativoVista].sort((a, b) => b.gastos - a.gastos)[0]?.persona || "-", [comparativoVista]);
-  const tablaConsolidada = useMemo(() => {
-    const filasGastos = gastosFiltrados.map((g) => ({
-      id: `g_${g.id}`,
-      tipo: "Gasto",
-      persona: g.persona || "-",
-      detalle: `${g.descripcion} (${g.categoria})`,
-      fecha: g.fecha,
-      monto: g.monto,
-      extra: g.medioPago || "-",
+  const tablaResumenBD = useMemo(
+    () => gastosFiltrados
+      .map((g) => ({
+        id: g.id,
+        quienLoHizo: g.persona || "-",
+        fecha: g.fecha,
+        tipoGasto: g.categoria,
+        monto: g.monto,
+      }))
+      .sort((a, b) => b.fecha.localeCompare(a.fecha)),
+    [gastosFiltrados],
+  );
+  /** Limpia filtros del dashboard para volver al estado por defecto. */
+  const onLimpiar = () => {
+    setFiltroPersona("todos");
+    setFiltroFechaInicio(inicioMes);
+    setFiltroFechaFin(hoy);
+    setMensaje("Filtros limpiados.");
+  };
+  /** Guarda los registros clave para base de datos y refresca localStorage. */
+  const onGuardarBD = () => {
+    const registros = tablaResumenBD.map((f) => ({
+      quien_lo_hizo: f.quienLoHizo,
+      fecha: f.fecha,
+      tipo_gasto: f.tipoGasto,
+      monto: f.monto,
     }));
-    const filasIngresos = ingresosFiltrados.map((i) => ({
-      id: `i_${i.id}`,
-      tipo: "Ingreso",
-      persona: i.responsable,
-      detalle: i.fuenteIngreso || "Ingreso",
-      fecha: i.fecha,
-      monto: i.monto,
-      extra: i.notaIngreso || "-",
-    }));
-    const filasDeudas = deudasFiltradas.map((d) => ({
-      id: `d_${d.id}`,
-      tipo: "Deuda",
-      persona: d.titular,
-      detalle: d.acreedor,
-      fecha: d.fechaInicio,
-      monto: d.saldoPendiente,
-      extra: `Cuota ${d.cuotaMensual.toLocaleString("es-CO")}`,
-    }));
-    return [...filasGastos, ...filasIngresos, ...filasDeudas].sort((a, b) => b.fecha.localeCompare(a.fecha));
-  }, [gastosFiltrados, ingresosFiltrados, deudasFiltradas]);
+    const paquete = guardarParaBaseDatos(registros);
+    setMensaje(`Guardado listo para base de datos: ${paquete.total} registros.`);
+  };
 
   if (!sesionActiva) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 text-slate-900">
+      <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-900 to-cyan-900 px-4 text-slate-900">
         <section className="w-full max-w-md rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 transition duration-200 hover:shadow-md">
           <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Acceso Ejecutivo</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Iniciar sesion</h1>
@@ -260,26 +260,26 @@ export default function App() {
               value={login.clave} onChange={(e) => onCambiarLogin("clave", e.target.value)} />
           </div>
           {errorLogin ? <p className="mt-3 text-sm text-indigo-600">{errorLogin}</p> : null}
-          <button onClick={onEntrar} className="mt-4 w-full rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white">Entrar</button>
+          <button onClick={onEntrar} className={`mt-4 w-full ${CLASE_BOTON_PRIMARIO}`}>Entrar</button>
         </section>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-3 py-4 text-slate-900 sm:px-4 sm:py-6">
-      <header className="mx-auto mb-4 max-w-7xl rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-700 p-5 text-white shadow-sm">
+    <main className="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-cyan-50 px-3 py-4 text-slate-900 sm:px-4 sm:py-6">
+      <header className="mx-auto mb-4 max-w-7xl rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-800 to-cyan-700 p-5 text-white shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-200">Dashboard Pareja</p>
             <h1 className="mt-1 text-2xl font-semibold sm:text-3xl">Control de Ingresos, Gastos y Deudas</h1>
             <p className="mt-1 text-sm text-slate-200">Tablero compartido: ambos usuarios ven el mismo estado financiero.</p>
           </div>
-          <button onClick={onSalir} className="rounded-lg bg-white/15 px-3 py-2 text-sm font-medium text-white ring-1 ring-white/40">Cerrar sesion</button>
+          <button onClick={onSalir} className="rounded-lg bg-white/15 px-3 py-2 text-sm font-medium text-white ring-1 ring-white/40 transition hover:bg-white/25">Cerrar sesion</button>
         </div>
       </header>
 
-      <section className="mx-auto mb-4 max-w-7xl rounded-xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
+      <section className="mx-auto mb-4 max-w-7xl rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
         <p className="text-xs text-slate-500">Filtros de analitica</p>
         <div className="mt-2 flex flex-wrap gap-2">
           <button onClick={() => setFiltroPersona("todos")} className={`rounded-lg px-3 py-1.5 text-sm transition ${filtroPersona === "todos" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>Todos</button>
@@ -297,6 +297,10 @@ export default function App() {
           <p className="rounded-lg bg-slate-50 px-2 py-1">Balance: <strong>${balanceVista.toLocaleString("es-CO")}</strong></p>
           <p className="rounded-lg bg-slate-50 px-2 py-1">Ahorro: <strong>{ahorroVista.toFixed(1)}%</strong></p>
         </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button onClick={() => setSeccionesAbiertas({ ingresos: true, gastos: true, resumenGeneral: true, deudas: true, grafica: true, tablaFinal: true })} className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200">Abrir todo</button>
+          <button onClick={() => setSeccionesAbiertas({ ingresos: false, gastos: false, resumenGeneral: false, deudas: false, grafica: false, tablaFinal: true })} className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200">Modo limpio</button>
+        </div>
       </section>
 
       {mensaje ? <p className="mx-auto mb-4 max-w-7xl rounded-lg bg-white px-3 py-2 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">{mensaje}</p> : null}
@@ -304,7 +308,7 @@ export default function App() {
       <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-12">
         <section className="space-y-4 lg:col-span-4">
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("ingresos")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Ingresos</h2><span>{seccionesAbiertas.ingresos ? "Ocultar" : "Ver"}</span></button>
+            <button onClick={() => alternarSeccion("ingresos")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.ingresos)}`}><h2 className="font-semibold">Ingresos</h2><span>{seccionesAbiertas.ingresos ? "Ocultar" : "Ver"}</span></button>
             {seccionesAbiertas.ingresos ? (
               <div className="border-t border-slate-200 p-4">
                 <div className="grid gap-3">
@@ -320,7 +324,7 @@ export default function App() {
                   <input className="rounded-lg border border-slate-300 px-3 py-2" placeholder="Nota (opcional)" maxLength={60} value={formularioIngreso.notaIngreso} onChange={(e) => onCambiarIngreso("notaIngreso", e.target.value)} />
                   {erroresIngreso.notaIngreso ? <p className="text-sm text-indigo-600">{erroresIngreso.notaIngreso}</p> : null}
                   <input className="rounded-lg border border-slate-300 px-3 py-2" type="date" value={formularioIngreso.fecha} onChange={(e) => onCambiarIngreso("fecha", e.target.value)} />
-                  <button onClick={onEnviarIngreso} className="rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white">Guardar ingreso</button>
+                  <button onClick={onEnviarIngreso} className={CLASE_BOTON_PRIMARIO}>Guardar ingreso</button>
                 </div>
                 <div className="mt-3 max-h-44 overflow-auto text-sm">
                   {ingresosFiltrados.map((i) => <p key={i.id} className="mb-2 rounded-lg bg-slate-50 px-2 py-1 capitalize">{i.responsable}: ${i.monto.toLocaleString("es-CO")} ({i.fuenteIngreso})</p>)}
@@ -330,7 +334,7 @@ export default function App() {
           </article>
 
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("deudas")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Deudas</h2><span>{seccionesAbiertas.deudas ? "Ocultar" : "Ver"}</span></button>
+            <button onClick={() => alternarSeccion("deudas")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.deudas)}`}><h2 className="font-semibold">Deudas</h2><span>{seccionesAbiertas.deudas ? "Ocultar" : "Ver"}</span></button>
             {seccionesAbiertas.deudas ? (
               <div className="border-t border-slate-200 p-4">
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -343,7 +347,7 @@ export default function App() {
                 </div>
                 <input className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2" type="date" value={formularioDeuda.fechaInicio} onChange={(e) => onCambiarDeuda("fechaInicio", e.target.value)} />
                 {Object.values(erroresDeuda)[0] ? <p className="mt-2 text-sm text-indigo-600">{Object.values(erroresDeuda)[0]}</p> : null}
-                <button onClick={onEnviarDeuda} className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white">Guardar deuda</button>
+                <button onClick={onEnviarDeuda} className={`mt-3 w-full ${CLASE_BOTON_PRIMARIO}`}>Guardar deuda</button>
               </div>
             ) : null}
           </article>
@@ -351,17 +355,12 @@ export default function App() {
 
         <section className="space-y-4 lg:col-span-4">
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("gastos")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Gastos</h2><span>{seccionesAbiertas.gastos ? "Ocultar" : "Ver"}</span></button>
-            {seccionesAbiertas.gastos ? <div className="border-t border-slate-200 p-4"><GastoForm formulario={formulario} errores={errores} personas={PERSONAS_TABLERO} onCambiar={onCambiarGasto} onEnviar={onEnviarGasto} /></div> : null}
-          </article>
-          <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("movimientos")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Movimientos</h2><span>{seccionesAbiertas.movimientos ? "Ocultar" : "Ver"}</span></button>
-            {seccionesAbiertas.movimientos ? (
+            <button onClick={() => alternarSeccion("gastos")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.gastos)}`}><h2 className="font-semibold">Gastos</h2><span>{seccionesAbiertas.gastos ? "Ocultar" : "Ver"}</span></button>
+            {seccionesAbiertas.gastos ? (
               <div className="border-t border-slate-200 p-4">
-                <div className="mb-3 flex gap-2">
-                  <button onClick={() => setFiltroMovimientos("todos")} className={`rounded-lg px-2 py-1 text-xs ${filtroMovimientos === "todos" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}>Todos</button>
-                  <button onClick={() => setFiltroMovimientos("altos")} className={`rounded-lg px-2 py-1 text-xs ${filtroMovimientos === "altos" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}>Altos</button>
-                  <button onClick={() => setFiltroMovimientos("hoy")} className={`rounded-lg px-2 py-1 text-xs ${filtroMovimientos === "hoy" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}>Hoy</button>
+                <GastoForm formulario={formulario} errores={errores} personas={PERSONAS_TABLERO} onCambiar={onCambiarGasto} onEnviar={onEnviarGasto} />
+                <div className="mt-3">
+                  <h3 className="mb-2 text-sm font-medium text-slate-700">Lista de gastos</h3>
                 </div>
                 <GastoLista gastos={gastosFiltrados} onEliminar={eliminar} />
               </div>
@@ -371,7 +370,7 @@ export default function App() {
 
         <section className="space-y-4 lg:col-span-4">
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("resumenGeneral")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Resumen General</h2><span>{seccionesAbiertas.resumenGeneral ? "Ocultar" : "Ver"}</span></button>
+            <button onClick={() => alternarSeccion("resumenGeneral")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.resumenGeneral)}`}><h2 className="font-semibold">Resumen General</h2><span>{seccionesAbiertas.resumenGeneral ? "Ocultar" : "Ver"}</span></button>
             {seccionesAbiertas.resumenGeneral ? (
               <div className="border-t border-slate-200 p-4">
                 <ResumenPanel totalIngresosMes={totalIngresosVista} totalMes={totalGastosVista} balanceMes={balanceVista}
@@ -387,10 +386,10 @@ export default function App() {
             ) : null}
           </article>
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("grafica")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Grafica y Tablas</h2><span>{seccionesAbiertas.grafica ? "Ocultar" : "Ver"}</span></button>
+            <button onClick={() => alternarSeccion("grafica")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.grafica)}`}><h2 className="font-semibold">Grafica y Tablas</h2><span>{seccionesAbiertas.grafica ? "Ocultar" : "Ver"}</span></button>
             {seccionesAbiertas.grafica ? (
               <div className="border-t border-slate-200 p-4">
-                <GraficaDonut porCategoria={porCategoriaVista} />
+                <GraficaDonut porCategoria={porCategoriaVista} totalIngresos={totalIngresosVista} totalGastos={totalGastosVista} totalBalance={balanceVista} />
                 <div className="mt-3 grid gap-3">
                   <article className="rounded-lg bg-slate-50 p-3"><h3 className="font-medium">Resumen por categoria</h3>{resumenCategorias.map((r) => <p key={r.categoria} className="text-sm">{r.categoria}: ${r.monto.toLocaleString("es-CO")} ({r.participacion.toFixed(1)}%)</p>)}</article>
                   <article className="rounded-lg bg-slate-50 p-3"><h3 className="font-medium">Resumen por responsable</h3>{resumenIngresosResponsable.map((r) => <p key={r.responsable} className="text-sm capitalize">{r.responsable}: ${r.monto.toLocaleString("es-CO")} ({r.participacion.toFixed(1)}%)</p>)}</article>
@@ -400,25 +399,27 @@ export default function App() {
             ) : null}
           </article>
           <article className={CLASE_CARD}>
-            <button onClick={() => alternarSeccion("tablaFinal")} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50"><h2 className="font-semibold">Tabla Consolidada</h2><span>{seccionesAbiertas.tablaFinal ? "Ocultar" : "Ver"}</span></button>
+            <button onClick={() => alternarSeccion("tablaFinal")} className={`flex w-full items-center justify-between rounded-t-2xl px-4 py-3 text-left transition hover:bg-slate-50 ${clasePestana(seccionesAbiertas.tablaFinal)}`}><h2 className="font-semibold">Tabla Resumen BD</h2><span>{seccionesAbiertas.tablaFinal ? "Ocultar" : "Ver"}</span></button>
             {seccionesAbiertas.tablaFinal ? (
               <div className="border-t border-slate-200 p-4">
-                <p className="mb-2 text-xs text-slate-500">Vista completa filtrada por persona y rango de fecha.</p>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="text-slate-500"><tr><th>Tipo</th><th>Persona</th><th>Detalle</th><th>Fecha</th><th>Monto</th><th>Extra</th></tr></thead>
+                <p className="mb-2 text-xs text-slate-500">Campos minimos para cargar en Supabase: quien lo hizo, fecha, tipo de gasto y monto.</p>
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <button onClick={onLimpiar} className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200">Limpiar</button>
+                  <button onClick={onGuardarBD} disabled={!tablaResumenBD.length} className={`rounded-lg px-3 py-1.5 text-xs font-medium text-white transition ${tablaResumenBD.length ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-300 cursor-not-allowed"}`}>Guardar</button>
+                </div>
+                <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200">
+                  <table className="w-full min-w-[520px] text-left text-sm">
+                    <thead className="text-slate-500"><tr><th>Quien lo hizo</th><th>Fecha</th><th>Tipo de gasto</th><th>Monto</th></tr></thead>
                     <tbody>
-                      {tablaConsolidada.map((f) => (
+                      {tablaResumenBD.map((f) => (
                         <tr key={f.id} className="border-t border-slate-200">
-                          <td className="py-2">{f.tipo}</td>
-                          <td className="capitalize">{f.persona}</td>
-                          <td>{f.detalle}</td>
+                          <td className="py-2 capitalize">{f.quienLoHizo}</td>
                           <td>{f.fecha}</td>
+                          <td>{f.tipoGasto}</td>
                           <td>${f.monto.toLocaleString("es-CO")}</td>
-                          <td>{f.extra}</td>
                         </tr>
                       ))}
-                      {!tablaConsolidada.length ? <tr><td colSpan="6" className="py-2 text-slate-500">Sin datos para el filtro seleccionado</td></tr> : null}
+                      {!tablaResumenBD.length ? <tr><td colSpan="4" className="py-2 text-slate-500">Sin datos para el filtro seleccionado</td></tr> : null}
                     </tbody>
                   </table>
                 </div>
